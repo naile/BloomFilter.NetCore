@@ -1,4 +1,5 @@
-﻿using System.Collections;
+using System.Collections;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace BloomFilter
@@ -12,9 +13,10 @@ namespace BloomFilter
     {
         private readonly BitArray _hashBits;
 
-        private readonly object sync = new object();
-
         private readonly static Task Empty = Task.FromResult(0);
+
+        private readonly ReaderWriterLockSlim readerWriterLock = new ReaderWriterLockSlim();
+
 
         /// <summary>
         /// Initializes a new instance of the <see cref="FilterMemory{T}"/> class.
@@ -49,17 +51,32 @@ namespace BloomFilter
         {
             bool added = false;
             var positions = ComputeHash(element);
-            lock (sync)
+            readerWriterLock.EnterUpgradeableReadLock();
+
+            try
             {
                 foreach (int position in positions)
                 {
                     if (!_hashBits.Get(position))
                     {
                         added = true;
-                        _hashBits.Set(position, true);
+                        readerWriterLock.EnterWriteLock();
+                        try
+                        {
+                            _hashBits.Set(position, true);
+                        }
+                        finally
+                        {
+                            readerWriterLock.ExitWriteLock();
+                        }
                     }
                 }
             }
+            finally
+            {
+                readerWriterLock.ExitUpgradeableReadLock();
+            }
+
             return added;
         }
 
@@ -81,13 +98,18 @@ namespace BloomFilter
         public override bool Contains(byte[] element)
         {
             var positions = ComputeHash(element);
-            lock (sync)
+            readerWriterLock.EnterReadLock();
+            try
             {
                 foreach (int position in positions)
                 {
                     if (!_hashBits.Get(position))
                         return false;
                 }
+            }
+            finally
+            {
+                readerWriterLock.ExitReadLock();
             }
             return true;
         }
@@ -102,9 +124,14 @@ namespace BloomFilter
         /// </summary>
         public override void Clear()
         {
-            lock (sync)
+            readerWriterLock.EnterWriteLock();
+            try
             {
                 _hashBits.SetAll(false);
+            }
+            finally
+            {
+                readerWriterLock.ExitWriteLock();
             }
         }
 
